@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deepseek Interface (streaming avec logs)</title>
+  <style>
+    body { font-family: sans-serif; padding: 1em; }
+    pre { background: #f4f4f4; padding: 0.5em; border: 1px solid #ddd; }
+    #logs { height: 150px; overflow-y: scroll; }
+  </style>
+</head>
+<body>
+  <h1>Interroger Deepseek</h1>
+  <input type="text" id="question" placeholder="Posez votre question ici" style="width: 80%;" />
+  <button onclick="ask()">Demander</button>
+
+  <h2>Réponse</h2>
+  <pre id="response"></pre>
+
+  <h2>Logs</h2>
+  <pre id="logs"></pre>
+
+  <script>
+    const logEl = document.getElementById('logs');
+    function log(...args) {
+      const line = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' ');
+      logEl.textContent += line + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function ask() {
+      const question = document.getElementById('question').value;
+      const out = document.getElementById('response');
+      out.textContent = '';
+      logEl.textContent = '';
+
+      log('🔍 Starting request for:', question);
+
+      let resp;
+      try {
+        resp = await fetch('http://localhost:11434/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'qwen2:7b-instruct-q4_K_M',
+            messages: [{ role: 'user', content: question }],
+            stream: true
+          })
+        });
+        log('✅ HTTP', resp.status, resp.statusText);
+      } catch (e) {
+        log('❌ Fetch error:', e.message);
+        out.textContent = 'Erreur réseau : ' + e.message;
+        return;
+      }
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        log('❌ HTTP error body:', text);
+        out.textContent = `Erreur HTTP ${resp.status}: see logs`;
+        return;
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', inThink = false;
+
+      log('🔄 Begin streaming parse');
+
+      while (true) {
+        let chunkValue;
+        try {
+          const { value, done } = await reader.read();
+          if (done) {
+            log('🔚 Stream done');
+            break;
+          }
+          chunkValue = decoder.decode(value, { stream: true });
+        } catch (e) {
+          log('❌ Stream read error:', e);
+          break;
+        }
+
+        buffer += chunkValue;
+        log('▶️ Received chunk:', JSON.stringify(chunkValue));
+
+        const parts = buffer.split('\n');
+        buffer = parts.pop();
+
+        for (const line of parts) {
+          if (!line.trim()) continue;
+          log('  • NDJSON line:', line);
+          try {
+            const obj = JSON.parse(line);
+            let text = obj.message.content || '';
+
+            if (text.includes('<think>')) {
+              inThink = true;
+              text = text.split('<think>')[0];
+              log('    – Entered <think>');
+            }
+            if (text.includes('</think>')) {
+              inThink = false;
+              text = text.split('</think>').pop();
+              log('    – Exited </think>');
+            }
+            if (inThink) {
+              log('    – Skipping inside think');
+              continue;
+            }
+
+            for (const ch of text) {
+              out.textContent += ch;
+            }
+          } catch (e) {
+            log('❌ JSON parse error:', e.message);
+          }
+        }
+      }
+    }
+  </script>
+</body>
+</html>
