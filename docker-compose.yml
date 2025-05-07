@@ -13,7 +13,31 @@ services:
       - ./ollama-models:/root/.ollama/models
     ports:
       - "11434:11434"
-    # Vous avez déjà tiré qwen2:7b-instruct-q4_K_M dans ./ollama-models
+
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD=secret
+      - MARIADB_DATABASE=chatdb
+    volumes:
+      - ./db:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  api:
+    build: ./api
+    container_name: chat-api
+    depends_on:
+      - mariadb
+    environment:
+      - DB_HOST=mariadb
+      - DB_USER=root
+      - DB_PASS=secret
+      - DB_NAME=chatdb
+      - OLLAMA_URL=http://ollama:11434
+    ports:
+      - "4000:4000"
 
   web:
     image: nginx:alpine
@@ -22,5 +46,3 @@ services:
       - ./web:/usr/share/nginx/html:ro
     ports:
       - "3001:80"
-    environment:
-      - OLLAMA_ORIGINS=*
