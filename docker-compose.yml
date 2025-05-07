@@ -1,4 +1,15 @@
 services:
+  api:
+    build: ./api
+    container_name: chat-api
+    env_file:
+      - .env
+    ports:
+      - '4000:4000'
+    depends_on:
+      - db
+      - ollama
+
   ollama:
     image: ollama/ollama
     container_name: ollama
@@ -9,40 +20,35 @@ services:
       - OLLAMA_NUM_PARALLEL=2
       - OLLAMA_THREADS=4
       - OLLAMA_CPU_OFFLOAD=true
+      - OLLAMA_KEEP_ALIVE=1h
     volumes:
       - ./ollama-models:/root/.ollama/models
     ports:
-      - "11434:11434"
-
-  mariadb:
-    image: mariadb:11
-    restart: unless-stopped
-    environment:
-      - MARIADB_ROOT_PASSWORD=secret
-      - MARIADB_DATABASE=chatdb
-    volumes:
-      - ./db:/var/lib/mysql
-    ports:
-      - "3306:3306"
-
-  api:
-    build: ./api
-    container_name: chat-api
-    depends_on:
-      - mariadb
-    environment:
-      - DB_HOST=mariadb
-      - DB_USER=root
-      - DB_PASS=secret
-      - DB_NAME=chatdb
-      - OLLAMA_URL=http://ollama:11434
-    ports:
-      - "4000:4000"
+      - '11434:11434'
 
   web:
     image: nginx:alpine
-    container_name: deepseek-web
+    container_name: chat-web
     volumes:
       - ./web:/usr/share/nginx/html:ro
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "3001:80"
+      - '3001:80'
+    depends_on:
+      - api
+      - ollama
+
+  db:
+    image: mariadb:10.9
+    container_name: chat-db
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_PASS}
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASS}
+    volumes:
+      - db_data:/var/lib/mysql
+
+volumes:
+  db_data:

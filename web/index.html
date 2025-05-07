@@ -1,193 +1,235 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Chat AI avec édition & mémoire</title>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>ChatAI</title>
   <style>
-    body { font-family:sans-serif; padding:1em; max-width:600px; margin:auto; }
-    #chat { border:1px solid #ddd; padding:1em; height:400px; overflow-y:auto;
-      background:#fafafa; display:flex; flex-direction:column; }
-    .message { margin:0.5em 0; padding:0.5em 1em; border-radius:1em;
-      max-width:80%; position:relative; }
-    .user-message { background:#d1e7dd; align-self:flex-end; margin-left:auto; cursor:pointer; }
-    .assistant-message { background:#e2e3e5; align-self:flex-start; margin-right:auto; }
-    .editing { padding:0.2em 0.5em !important; }
-    #controls { display:flex; margin-top:1em; }
-    #question { flex:1; padding:0.5em; }
-    button { padding:0.5em 1em; margin-left:0.5em; }
-    #logs { height:200px; overflow-y:auto; background:#f4f4f4; padding:0.5em;
-      border:1px solid #ddd; margin-top:1em; white-space:pre-wrap; font-size:0.85em; }
+    body{font-family:sans-serif;padding:1em;max-width:600px;margin:auto}
+    #chat{border:1px solid #ddd;padding:1em;height:400px;overflow-y:auto;background:#fafafa;display:flex;flex-direction:column}
+    .message{margin:0.5em 0;padding:0.5em 1em;border-radius:1em;max-width:80%}
+    .user-message{background:#d1e7dd;align-self:flex-end;margin-left:auto;cursor:pointer}
+    .assistant-message{background:#e2e3e5;align-self:flex-start;margin-right:auto}
+    .editing{padding:0.2em 0.5em!important}
+    #controls{display:flex;margin-top:1em}
+    #question{flex:1;padding:0.5em}
+    button{padding:0.5em 1em;margin-left:0.5em}
+    #logs{height:200px;overflow-y:auto;background:#f4f4f4;padding:0.5em;border:1px solid #ddd;margin-top:1em;white-space:pre-wrap;font-size:0.85em}
   </style>
 </head>
 <body>
-<h1>Chat AI</h1>
+<h1>ChatAI</h1>
+
 <div id="chat"></div>
 
 <div id="controls">
-  <input type="text" id="question" placeholder="Tapez votre message ici" />
-  <button onclick="ask()">Envoyer</button>
+  <input type="text" id="question" placeholder="Tapez votre message ici"/>
+  <button id="sendBtn" disabled>Envoyer</button>
 </div>
 
 <h2>Logs (local)</h2>
 <pre id="logs"></pre>
 
 <script>
-  /* ---------- constantes ---------- */
-  const apiBase   = window.location.origin.replace(':3001',':4000');
+  const apiBase   = '/api';
+  const ollamaUrl = '/ollama/api/generate';
   const logEl     = document.getElementById('logs');
   const chatEl    = document.getElementById('chat');
+  const sendBtn   = document.getElementById('sendBtn');
   const TOKEN_MAX = 3900;
 
-  /* ---------- session ---------- */
-  let sessionId = localStorage.getItem('session_id');
-  if(!sessionId){
-    fetch(apiBase+'/session')
-            .then(r=>r.json()).then(d=>{
-      sessionId=d.sessionId;
-      localStorage.setItem('session_id',sessionId);
-      loadConversation();
-    });
-  }else loadConversation();
+  let sessionId    = localStorage.getItem('session_id');
+  let sessionReady = false;
+  let conversation = [];
 
-  /* ---------- helpers ---------- */
-  function log(...args){
+  function log(...a){
     const ts = new Date().toLocaleTimeString();
-    logEl.textContent += `[${ts}] `+args.join(' ')+'\n';
+    logEl.textContent += `[${ts}] ${a.join(' ')}\n`;
     logEl.scrollTop = logEl.scrollHeight;
   }
+  const roughTokenCount = s => Math.ceil(s.split(/\s+/).length * 1.3);
 
-  /* ---------- conversation en mémoire JS ---------- */
-  let conversation=[];   // [{id, role, content}]
+  async function initSession(){
+    log('Interface chargée, initialisation de la session…');
+    if(!sessionId){
+      log('Aucune session en cache, création…');
+      const res  = await fetch(apiBase + '/session');
+      const { sessionId: sid } = await res.json();
+      sessionId = sid;
+      localStorage.setItem('session_id', sid);
+      log('Session créée :', sid);
+    }else{
+      log('Session existante :', sessionId);
+    }
+    await loadConversation();
+    sessionReady     = true;
+    sendBtn.disabled = false;
+    log('Session prête, vous pouvez envoyer');
+  }
+  window.addEventListener('load', initSession);
+
   async function loadConversation(){
-    const res = await fetch(`${apiBase}/messages/${sessionId}`);
+    log('Chargement de la conversation…');
+    const res  = await fetch(`${apiBase}/messages/${sessionId}`);
     conversation = await res.json();
+    log(`Conversation chargée (${conversation.length}messages)`);
     rebuildChat();
   }
-
-  /* ---------- rendu ---------- */
-  function clearChat(){ chatEl.innerHTML=''; }
-  function renderMessage(obj){
-    const {id,role,content} = obj;
+  function clearChat(){ chatEl.innerHTML = '' }
+  function renderMessage({id,role,content}){
     const el = document.createElement('div');
-    el.className='message '+(role==='user'?'user-message':'assistant-message');
-    el.textContent=content;
-    el.dataset.msgId=id;
+    el.className = 'message ' + (role==='user'?'user-message':'assistant-message');
+    el.textContent = content;
+    el.dataset.msgId = id;
     if(role==='user'){
-      el.addEventListener('click',()=>enterEditMode(id,el));
+      el.addEventListener('click',()=> enterEditMode(id, el));
     }
     chatEl.appendChild(el);
     chatEl.scrollTop = chatEl.scrollHeight;
+    return el;
   }
-  function rebuildChat(){ clearChat(); conversation.forEach(renderMessage); }
+  function rebuildChat(){
+    clearChat();
+    conversation.forEach(renderMessage);
+  }
 
-  /* ---------- édition ---------- */
   function enterEditMode(msgId, el){
     if(el.classList.contains('editing')) return;
     const original = conversation.find(m=>m.id==msgId).content;
     el.classList.add('editing');
-    el.innerHTML=`
-    <input type="text" style="width:70%" value="${original.replace(/"/g,'&quot;')}">
-    <button class="ok">Renvoi</button>
-    <button class="cancel">Annuler</button>`;
+    el.innerHTML = `
+      <input style="width:70%" value="${original.replace(/"/g,'&quot;')}"/>
+      <button class="ok">Renvoi</button>
+      <button class="cancel">Annuler</button>
+    `;
     const input = el.querySelector('input');
 
-    el.querySelector('.cancel').onclick = ()=>{ rebuildChat(); };
-    el.querySelector('.ok').onclick = async ()=>{
-      const newText=input.value.trim();
-      if(!newText) return;
-      await fetch(`${apiBase}/messages/${sessionId}/${msgId}`,{method:'DELETE'});
-      await fetch(`${apiBase}/messages/${sessionId}`,{
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({role:'user',content:newText})
+    el.querySelector('.cancel').onclick = () => {
+      log(`Édition annulée #${msgId}`);
+      rebuildChat();
+    };
+
+    el.querySelector('.ok').onclick = async () => {
+      const newTxt = input.value.trim();
+      if(!newTxt) return;
+
+      await fetch(`${apiBase}/messages/${sessionId}/${msgId}`, { method:'DELETE' });
+
+      const r = await fetch(`${apiBase}/messages/${sessionId}`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({role:'user',content:newTxt})
       });
-      log(`✏️  #${msgId} édité : "${newText}"`);
+      const { insertId } = await r.json();
+
+      log(`Message #${msgId} remplacé par #${insertId}: "${newTxt}"`);
       await loadConversation();
       await sendStreamedResponse();
     };
   }
 
-  /* ---------- envoi utilisateur ---------- */
   async function ask(){
-    const inp=document.getElementById('question');
-    const txt=inp.value.trim();
+    if(!sessionReady){ log('Session pas prête'); return; }
+    const inp = document.getElementById('question');
+    const txt = inp.value.trim();
     if(!txt) return;
-    inp.value='';
-    await fetch(`${apiBase}/messages/${sessionId}`,{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({role:'user',content:txt})
+    inp.value = '';
+    log('Envoi utilisateur:', txt);
+
+    const r = await fetch(`${apiBase}/messages/${sessionId}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({role:'user',content:txt})
     });
-    conversation.push({id:'temp',role:'user',content:txt});
-    renderMessage({role:'user',content:txt,id:'temp'});
+    const { insertId } = await r.json();
+
+    const localUser = {id:insertId,role:'user',content:txt};
+    conversation.push(localUser);
+    renderMessage(localUser);
+
     await sendStreamedResponse();
   }
-
-  /* ---------- construction prompt & streaming ---------- */
-  function roughTokenCount(str){ return Math.ceil(str.split(/\s+/).length*1.3); }
+  sendBtn.addEventListener('click', ask);
 
   async function buildPrompt(){
-    let tokens=0, promptPieces=[];
-    const system = 'Tu es un assistant factuel. Réponds uniquement avec des faits vérifiables. Si tu n\'es pas sûr, dis "Je ne sais pas".';
-    tokens += roughTokenCount(system);
+    const sys = 'Tu es un assistant factuel. Réponds uniquement avec des faits vérifiables. Si tu n\'es pas sûr, dis "Je ne sais pas".';
+    let tks   = roughTokenCount(sys);
+    const parts = [];
+
     for(let i=conversation.length-1;i>=0;i--){
       const {role,content}=conversation[i];
-      const piece=(role==='user'?'Utilisateur':'Assistant')+': '+content;
-      const t=roughTokenCount(piece);
-      if(tokens+t> TOKEN_MAX) break;
-      tokens+=t;
-      promptPieces.unshift(piece);
+      const line = (role==='user'?'Utilisateur':'Assistant')+': '+content;
+      const t = roughTokenCount(line);
+      if(tks+t>TOKEN_MAX) break;
+      tks += t;
+      parts.unshift(line);
     }
-    return system+'\n\n'+promptPieces.join('\n')+'\nAssistant: ';
+    return sys+'\n\n'+parts.join('\n')+'\nAssistant: ';
   }
 
   async function sendStreamedResponse(){
     const promptText = await buildPrompt();
 
-    const upRes = await fetch(`${apiBase}/messages/${sessionId}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({role:'assistant',content:''})
+    const localAss = {id:'streaming',role:'assistant',content:''};
+    conversation.push(localAss);
+    const el = renderMessage(localAss);
+
+    log('Appel Ollama…');
+    const resp = await fetch(ollamaUrl,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        model:'mistral:7b-instruct-q4_K_M',
+        prompt:promptText,
+        temperature:0,
+        stream:true
+      })
     });
-    const {insertId} = await upRes.json?await upRes.json():{insertId:null};
 
-    const localAssistant = {id:insertId||Date.now(),role:'assistant',content:''};
-    conversation.push(localAssistant);
-    const el = renderMessage(localAssistant);
+    if(!resp.ok){
+      log('Erreur',resp.status);
+      el.textContent = `Err ${resp.status}`;
+      conversation.pop();
+      return;
+    }
 
-    log('🔄  Appel Ollama…');
-    const resp = await fetch('http://localhost:11434/api/generate',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'mistral:7b-instruct-q4_K_M',
-        prompt:promptText,temperature:0,stream:true})
-    });
-    if(!resp.ok){ el.textContent=`Err ${resp.status}`; return; }
+    const rdr = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf='', think=false;
 
-    const dec=new TextDecoder(); const reader=resp.body.getReader();
-    let buf='',think=false;
     while(true){
-      const {value,done}=await reader.read();
+      const {value,done}=await rdr.read();
       if(done) break;
       buf+=dec.decode(value,{stream:true});
-      const parts=buf.split('\n'); buf=parts.pop();
-      for(const line of parts){
-        if(!line.trim()) continue;
+      const lines = buf.split('\n');
+      buf = lines.pop();
+
+      for(const ln of lines){
+        if(!ln.trim()) continue;
         try{
-          const obj=JSON.parse(line); let txt=obj.response||'';
+          const o = JSON.parse(ln);
+          let txt = o.response||'';
           if(txt.includes('<think>')){ think=true; txt=txt.split('<think>')[0]; }
           if(txt.includes('</think>')){ think=false; txt=txt.split('</think>').pop(); }
           if(think) continue;
-          el.textContent+=txt;
-          localAssistant.content+=txt;
+          el.textContent   += txt;
+          localAss.content += txt;
         }catch{}
       }
     }
-    await fetch(`${apiBase}/messages/${sessionId}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({role:'assistant',content:localAssistant.content})
-    });
-    fetch(`${apiBase}/internal/maybe‑summarize/${sessionId}`,{method:'POST'});
-  }
 
-  window.addEventListener('load',()=>log('🔔 Interface prête.'));
+    const res = await fetch(`${apiBase}/messages/${sessionId}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({role:'assistant',content:localAss.content})
+    });
+    const { insertId } = await res.json();
+    localAss.id = insertId;
+
+    await fetch(`${apiBase}/internal/maybe-summarize/${sessionId}`,{method:'POST'});
+
+    await loadConversation();
+  }
 </script>
 </body>
 </html>
